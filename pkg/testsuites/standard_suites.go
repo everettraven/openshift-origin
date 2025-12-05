@@ -92,6 +92,7 @@ func AllTestSuites(ctx context.Context) ([]*ginkgo.TestSuite, error) {
 				Qualifiers:                 s.Qualifiers,
 				TestTimeout:                timeout,
 				ClusterStabilityDuringTest: ginkgo.ClusterStabilityDuringTest(s.ClusterStability),
+				RunConstraint:              s.RunConstraint,
 			})
 		}
 	}

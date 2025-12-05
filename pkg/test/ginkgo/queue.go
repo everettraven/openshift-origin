@@ -99,6 +99,18 @@ func (q *parallelByFileTestQueue) Execute(ctx context.Context, tests []*testCase
 	execute(ctx, testSuiteRunner, tests, parallelism)
 }
 
+func (q *parallelByFileTestQueue) ExecuteAll(ctx context.Context, tests []*testCase, parallelism int, testOutput testOutputConfig, maybeAbortOnFailureFn testAbortFunc) {
+	testSuiteProgress := newTestSuiteProgress(len(tests))
+	testSuiteRunner := &testSuiteRunnerImpl{
+		commandContext:        q.commandContext,
+		testOutput:            testOutput,
+		testSuiteProgress:     testSuiteProgress,
+		maybeAbortOnFailureFn: maybeAbortOnFailureFn,
+	}
+
+	testSuiteRunner.RunAllTests(ctx, tests)
+}
+
 // execute is a convenience for unit testing
 func execute(ctx context.Context, testSuiteRunner testSuiteRunner, tests []*testCase, parallelism int) {
 	if ctx.Err() != nil {

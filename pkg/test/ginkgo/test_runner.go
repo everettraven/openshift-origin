@@ -63,6 +63,40 @@ func (r *testSuiteRunnerImpl) RunOneTest(ctx context.Context, test *testCase) {
 	mutateTestCaseWithResults(test, testRunResult)
 }
 
+// RunAllTests runs all test, mutating the testCase with result, and reports the results
+func (r *testSuiteRunnerImpl) RunAllTests(ctx context.Context, tests []*testCase) {
+	testResultHandlers := map[string]func(result *testRunResult){}
+
+	resultFuncByTest := func(test *testCase) func(result *testRunResult) {
+		return func(res *testRunResult) {
+			result := &testRunResultHandle{testRunResult: res}
+			recordTestResultInMonitor(result, r.testOutput.monitorRecorder)
+			mutateTestCaseWithResults(test, result)
+			r.testSuiteProgress.TestEnded(test.name, result)
+			recordTestResultInLogWithoutOverlap(result, r.testOutput.testOutputLock, r.testOutput.out, r.testOutput.includeSuccessfulOutput)
+		}
+	}
+
+	for _, test := range tests {
+		// record the test happening with the monitor
+		r.testOutput.monitorRecorder.AddIntervals(monitorapi.NewInterval(monitorapi.SourceE2ETest, monitorapi.Info).
+			Locator(monitorapi.NewLocator().E2ETest(test.name)).
+			Message(monitorapi.NewMessage().HumanMessage("started").Reason(monitorapi.E2ETestStarted)).BuildNow())
+
+		// log the results to systemout
+		r.testSuiteProgress.LogTestStart(r.testOutput.out, test.name)
+
+		testResultHandlers[test.name] = resultFuncByTest(test)
+	}
+
+	results := r.commandContext.RunTestsInNewProcess(ctx, tests)
+	for _, result := range results {
+		testResultHandlers[result.name](result)
+	}
+
+	// TODO: handle maybeAbortOnFailureFn ???
+}
+
 func mutateTestCaseWithResults(test *testCase, testRunResult *testRunResultHandle) {
 	test.start = testRunResult.start
 	test.end = testRunResult.end
@@ -360,6 +394,84 @@ func (c *commandContext) RunTestInNewProcess(ctx context.Context, test *testCase
 	ret.start = extensions.Time(results[0].StartTime)
 	ret.end = extensions.Time(results[0].EndTime)
 	ret.extensionTestResult = results[0]
+	return ret
+}
+
+// RunTestsInNewProcess runs a test case in a different process and returns a result
+func (c *commandContext) RunTestsInNewProcess(ctx context.Context, tests []*testCase) []*testRunResult {
+	ret := []*testRunResult{}
+
+	testsToRun := []*testCase{}
+
+	for _, test := range tests {
+		if test.skipped {
+			ret = append(ret, &testRunResult{
+				name:      test.name,
+				testState: TestSkipped,
+			})
+
+			continue
+		}
+
+		// Everything's been migrated to OTE, including origin itself, test spec must have a binary set
+		if test.binary == nil {
+			ret = append(ret, &testRunResult{
+				name:            test.name,
+				testState:       TestFailed,
+				testOutputBytes: []byte("test has no binary configured; this should not be possible"),
+			})
+
+			continue
+		}
+
+		testsToRun = append(testsToRun, test)
+	}
+
+	testsByBinary := map[*extensions.TestBinary][]string{}
+
+	for _, test := range testsToRun {
+		testsByBinary[test.binary] = append(testsByBinary[test.binary], test.name)
+	}
+
+	testEnv := append(os.Environ(), updateEnvVars(c.env)...)
+	timeout := c.timeout
+
+	for binary, tests := range testsByBinary {
+		// TODO: handle parallelism here
+		results := binary.RunTests(ctx, timeout, testEnv, tests...)
+		if len(results) == 0 {
+			for _, test := range tests {
+				ret = append(ret, &testRunResult{
+					name:            test,
+					testState:       TestFailed,
+					testOutputBytes: []byte("no results from external binary"),
+				})
+			}
+		}
+
+		for _, result := range results {
+			trr := &testRunResult{
+				name:                result.Name,
+				start:               extensions.Time(result.StartTime),
+				end:                 extensions.Time(result.EndTime),
+				extensionTestResult: result,
+			}
+
+			switch result.Result {
+			case extensiontests.ResultFailed:
+				trr.testState = TestFailed
+				trr.testOutputBytes = []byte(fmt.Sprintf("%s\n%s", result.Output, result.Error))
+			case extensiontests.ResultPassed:
+				trr.testState = TestSucceeded
+			case extensiontests.ResultSkipped:
+				trr.testState = TestSkipped
+				trr.testOutputBytes = []byte(results[0].Output)
+			}
+
+			ret = append(ret, trr)
+		}
+	}
+
 	return ret
 }
 

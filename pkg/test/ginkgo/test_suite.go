@@ -133,6 +133,8 @@ type TestSuite struct {
 	// OTE
 	Qualifiers []string              `json:"qualifiers,omitempty"`
 	Extension  *extensions.Extension `json:"-"`
+
+	RunConstraint string `json:"runConstraint,omitempty"`
 }
 
 type TestMatchFunc func(name string) bool

@@ -15,6 +15,7 @@ type Extension struct {
 	Source     Source    `json:"source"`
 	Component  Component `json:"component"`
 
+
 	// Suites that the extension wants to advertise/participate in.
 	Suites []Suite `json:"suites"`
 
@@ -24,6 +25,13 @@ type Extension struct {
 	specs         extensiontests.ExtensionTestSpecs
 	obsoleteTests sets.Set[string]
 }
+
+type RunConstraint string
+
+const (
+	RunConstraintNone = ""
+	RunConstraintWholeSuite = "WholeSuite"
+)
 
 // Source contains the details of the commit and source URL.
 type Source struct {
@@ -81,6 +89,18 @@ type Suite struct {
 	ClusterStability ClusterStability `json:"clusterStability,omitempty"`
 	// TestTimeout is the default timeout for tests in this suite.
 	TestTimeout *time.Duration `json:"testTimeout,omitempty"`
+
+	// RunConstraint specifies a constraint on how the extension's tests
+	// must be run.
+	//
+	// Allowed values are BySuite and omitted.
+	//
+	// When set to BySuite, the extension's tests should be run together
+	// by suite.
+	//
+	// When omitted, tests belonging to this extension will how they already do
+	// - one at a time.
+	RunConstraint RunConstraint `json:"runConstraint,omitempty"`
 }
 
 type Image struct {
@@ -88,4 +108,7 @@ type Image struct {
 	Registry string `json:"registry"`
 	Name     string `json:"name"`
 	Version  string `json:"version"`
+	// Mapped is the image reference that this image is mirrored to by the image mirror tool.
+	// This field should be populated if the mirrored image reference is predetermined by the test extensions.
+	Mapped *Image `json:"mapped,omitempty"`
 }

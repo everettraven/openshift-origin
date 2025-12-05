@@ -444,3 +444,5 @@ replace (
 
 // github.com/operator-framework/operator-lifecycle-manager requires this import.
 replace github.com/openshift/api => github.com/openshift/api v0.0.0-20250710004639-926605d3338b
+
+replace github.com/openshift-eng/openshift-tests-extension => ../../openshift-eng/openshift-tests-extension

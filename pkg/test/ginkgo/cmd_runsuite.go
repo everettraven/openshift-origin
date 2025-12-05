@@ -115,7 +115,6 @@ func NewGinkgoRunSuiteOptions(streams genericclioptions.IOStreams) *GinkgoRunSui
 }
 
 func (o *GinkgoRunSuiteOptions) BindFlags(flags *pflag.FlagSet) {
-
 	monitorNames := defaultmonitortests.ListAllMonitorTests()
 
 	flags.BoolVar(&o.DryRun, "dry-run", o.DryRun, "Print the tests to run without executing them.")
@@ -167,7 +166,8 @@ func max(a, b int) int {
 }
 
 func (o *GinkgoRunSuiteOptions) Run(suite *TestSuite, clusterConfig *clusterdiscovery.ClusterConfiguration, junitSuiteName string, monitorTestInfo monitortestframework.MonitorTestInitializationInfo,
-	upgrade bool) error {
+	upgrade bool,
+) error {
 	ctx := context.Background()
 	var sharder Sharder
 	switch o.ShardStrategy {
@@ -509,34 +509,68 @@ func (o *GinkgoRunSuiteOptions) Run(suite *TestSuite, clusterConfig *clusterdisc
 	// we loop indefinitely.
 	for i := 0; (i < 1 || count == -1) && testCtx.Err() == nil; i++ {
 		kubeTestsCopy := copyTests(kubeTests)
-		q.Execute(testCtx, kubeTestsCopy, parallelism, testOutputConfig, abortFn)
-		tests = append(tests, kubeTestsCopy...)
 
 		// I thought about randomizing the order of the kube, storage, and openshift tests, but storage dominates our e2e runs, so it doesn't help much.
 		storageTestsCopy := copyTests(storageTests)
-		q.Execute(testCtx, storageTestsCopy, max(1, parallelism/2), testOutputConfig, abortFn) // storage tests only run at half the parallelism, so we can avoid cloud provider quota problems.
-		tests = append(tests, storageTestsCopy...)
 
 		networkK8sTestsCopy := copyTests(networkK8sTests)
-		q.Execute(testCtx, networkK8sTestsCopy, max(1, parallelism/2), testOutputConfig, abortFn) // run network tests separately.
-		tests = append(tests, networkK8sTestsCopy...)
 
 		networkTestsCopy := copyTests(networkTests)
-		q.Execute(testCtx, networkTestsCopy, max(1, parallelism/2), testOutputConfig, abortFn) // run network tests separately.
-		tests = append(tests, networkTestsCopy...)
 
 		buildsTestsCopy := copyTests(buildsTests)
-		q.Execute(testCtx, buildsTestsCopy, max(1, parallelism/2), testOutputConfig, abortFn) // builds tests only run at half the parallelism, so we can avoid high cpu problems.
-		tests = append(tests, buildsTestsCopy...)
 
 		openshiftTestsCopy := copyTests(openshiftTests)
-		q.Execute(testCtx, openshiftTestsCopy, parallelism, testOutputConfig, abortFn)
-		tests = append(tests, openshiftTestsCopy...)
 
 		// run the must-gather tests after parallel tests to reduce resource contention
 		mustGatherTestsCopy := copyTests(mustGatherTests)
+
+		// TODO: constant
+		if suite.RunConstraint == "WholeSuite" {
+			testCopies := append(kubeTestsCopy,
+				append(
+					storageTestsCopy,
+					append(
+						networkK8sTestsCopy,
+						append(
+							networkTestsCopy,
+							append(
+								buildsTestsCopy,
+								append(
+									openshiftTestsCopy,
+									mustGatherTestsCopy...,
+								)...,
+							)...,
+						)...,
+					)...,
+				)...,
+			)
+			q.ExecuteAll(testCtx, testCopies, parallelism, testOutputConfig, abortFn)
+			tests = append(tests, testCopies...)
+
+			continue
+		}
+
+		q.Execute(testCtx, kubeTestsCopy, parallelism, testOutputConfig, abortFn)
+		tests = append(tests, kubeTestsCopy...)
+
+		q.Execute(testCtx, storageTestsCopy, max(1, parallelism/2), testOutputConfig, abortFn) // storage tests only run at half the parallelism, so we can avoid cloud provider quota problems.
+		tests = append(tests, storageTestsCopy...)
+
+		q.Execute(testCtx, networkK8sTestsCopy, max(1, parallelism/2), testOutputConfig, abortFn) // run network tests separately.
+		tests = append(tests, networkK8sTestsCopy...)
+
+		q.Execute(testCtx, networkTestsCopy, max(1, parallelism/2), testOutputConfig, abortFn) // run network tests separately.
+		tests = append(tests, networkTestsCopy...)
+
+		q.Execute(testCtx, buildsTestsCopy, max(1, parallelism/2), testOutputConfig, abortFn) // builds tests only run at half the parallelism, so we can avoid high cpu problems.
+		tests = append(tests, buildsTestsCopy...)
+
+		q.Execute(testCtx, openshiftTestsCopy, parallelism, testOutputConfig, abortFn)
+		tests = append(tests, openshiftTestsCopy...)
+
 		q.Execute(testCtx, mustGatherTestsCopy, parallelism, testOutputConfig, abortFn)
 		tests = append(tests, mustGatherTestsCopy...)
+
 	}
 
 	// TODO: will move to the monitor
@@ -938,12 +972,16 @@ func writeRunSuiteOptions(seed int64, totalNodes, workerNodes, parallelism int, 
 	var rows []map[string]string
 
 	rows = make([]map[string]string, 0)
-	rows = append(rows, map[string]string{"RandomSeed": fmt.Sprintf("%d", seed), "ClusterStability": string(info.ClusterStabilityDuringTest),
-		"WorkerNodes": fmt.Sprintf("%d", workerNodes), "TotalNodes": fmt.Sprintf("%d", totalNodes), "Parallelism": fmt.Sprintf("%d", parallelism)})
+	rows = append(rows, map[string]string{
+		"RandomSeed": fmt.Sprintf("%d", seed), "ClusterStability": string(info.ClusterStabilityDuringTest),
+		"WorkerNodes": fmt.Sprintf("%d", workerNodes), "TotalNodes": fmt.Sprintf("%d", totalNodes), "Parallelism": fmt.Sprintf("%d", parallelism),
+	})
 	dataFile := dataloader.DataFile{
 		TableName: "run_suite_options",
-		Schema: map[string]dataloader.DataType{"ClusterStability": dataloader.DataTypeString, "RandomSeed": dataloader.DataTypeInteger, "WorkerNodes": dataloader.DataTypeInteger,
-			"TotalNodes": dataloader.DataTypeInteger, "Parallelism": dataloader.DataTypeInteger},
+		Schema: map[string]dataloader.DataType{
+			"ClusterStability": dataloader.DataTypeString, "RandomSeed": dataloader.DataTypeInteger, "WorkerNodes": dataloader.DataTypeInteger,
+			"TotalNodes": dataloader.DataTypeInteger, "Parallelism": dataloader.DataTypeInteger,
+		},
 		Rows: rows,
 	}
 	fileName := filepath.Join(artifactDir, fmt.Sprintf("run-suite-options%s-%s", timeSuffix, dataloader.AutoDataLoaderSuffix))
